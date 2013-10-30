@@ -1,0 +1,95 @@
+BRNAME = br0
+CONTROLLER_IP = 10.0.0.1
+
+# Export environment variables
+PWD=$(shell pwd)
+OVS_SRC=$(PWD)/../openvswitch
+OVS_KMODDIR=$(OVS_SRC)/datapath/linux
+IFACES=$(shell ip link show|grep "^[0-9]: eth[1-9]"|awk '{ print $$2 }'|tr -d ":")
+NODENUMBER=$(shell uname -n|tr -d "switch")
+NODEIDX16=$(shell printf "%016x" $(NODENUMBER))
+
+export OVS_SYSCONFDIR=/usr/local/etc
+export OVS_RUNDIR=/var/run/openvswitch
+export OVS_PKGDATADIR=$(OVS_SRC)/build/share/openvswitch
+export OVS_LOGDIR=$(OVS_SRC)/build/var/log
+export OVS_BINDIR=$(OVS_SRC)/build/bin
+export OVS_SBINDIR=$(OVS_SRC)/build/sbin
+
+insert-module:
+	insmod $(OVS_KMODDIR)/openvswitch_mod.ko
+	insmod $(OVS_KMODDIR)/brcompat_mod.ko
+
+remove-module:
+	-rmmod brcompat_mod
+	-rmmod openvswitch_mod
+
+
+create-db: 
+	mkdir -p $(OVS_SYSCONFDIR)/openvswitch
+	$(OVS_BINDIR)/ovsdb-tool create $(OVS_SYSCONFDIR)/openvswitch/conf.db $(OVS_PKGDATADIR)/vswitch.ovsschema
+	
+#Startup
+
+start-server server:
+	mkdir -p $(OVS_RUNDIR)
+	-$(OVS_SBINDIR)/ovsdb-server $(OVS_SYSCONFDIR)/openvswitch/conf.db --remote=punix:$(OVS_RUNDIR)/db.sock --remote=db:Open_vSwitch,manager_options --private-key=db:SSL,private_key --certificate=db:SSL,certificate --bootstrap-ca-cert=db:SSL,ca_cert --pidfile --detach
+# Check DB daemon
+	ps -ef | grep ovsdb-server
+
+stop-server:
+	-killall ovsdb-server
+	
+create_br:
+	$(OVS_BINDIR)/ovs-vsctl --no-wait add-br $(BRNAME)
+	$(OVS_BINDIR)/ovs-vsctl --no-wait set Bridge $(BRNAME) other-config:datapath-id=$(NODEIDX16)
+
+
+eth%:
+	$(OVS_BINDIR)/ovs-vsctl --no-wait add-port $(BRNAME) eth$*
+	
+init: create_br $(IFACES)
+#$(OVS_BINDIR)/ovs-vsctl --no-wait add-port $(BRNAME) eth1
+	
+#$(OVS_BINDIR)/ovs-vsctl --no-wait add-port $(BRNAME) eth2
+	
+#$(OVS_BINDIR)/ovs-vsctl --no-wait add-port $(BRNAME) eth3
+	
+	$(OVS_BINDIR)/ovs-vsctl --no-wait set-controller $(BRNAME) tcp:$(CONTROLLER_IP):6633
+
+end:
+	-$(OVS_BINDIR)/ovs-vsctl --no-wait del-br $(BRNAME)
+
+
+# Start
+start-daemon daemon:
+	-$(OVS_SBINDIR)/ovs-vswitchd unix:$(OVS_RUNDIR)/db.sock --pidfile --detach
+
+daemon-only:
+	-$(OVS_SBINDIR)/ovs-vswitchd unix:$(OVS_RUNDIR)/db.sock
+
+stop-daemon:
+	-killall ovs-vswitchd
+
+
+clean:
+	rm -rf $(OVS_SYSCONFDIR)/openvswitch
+	rm -rf $(OVS_RUNDIR)
+	
+
+remove-config: server daemon end stop-server stop-daemon
+
+config: server init stop-server
+
+#Start all configuration and openflow
+start: config boot
+
+#Use this target to restart openflow when it is running
+restart: remove-config stop-daemon remove-module insert-module start-server init start-daemon 
+
+#Use this target to start openflow after the machine has booted. This supposes that the configuration exist
+boot: start-server insert-module start-daemon 
+
+#Use this target is something goes bad, really bad!
+stop:	remove-config remove-module
+

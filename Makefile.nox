@@ -1,0 +1,18 @@
+PWD=$(shell pwd)
+
+export LD_LIBRARY_PATH=$(PWD)/../nox/build/src/lib/.libs:$(PWD)/../nox/build/src/builtin/.libs
+
+start:
+	cd ../nox/build/src/;./nox_core -v -i ptcp:6633 nosql_manager sflowpusher&
+
+startclassic:
+	cd ../nox/build/src/;./nox_core -v -i ptcp:6633 routing snmp_routing&
+
+startpyswitch:
+	cd ../nox/build/src/;./nox_core -v -i ptcp:6633 discoveryws&
+
+stop:	
+	-killall lt-nox_core
+	killall python #to kill snmp-walker.py
+
+restart: stop start
